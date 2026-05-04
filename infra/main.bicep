@@ -278,7 +278,6 @@ resource documentIntelligence 'Microsoft.CognitiveServices/accounts@2026-03-01' 
     customSubDomainName: documentIntelligenceName
     disableLocalAuth: true
     networkAcls: {
-      bypass: 'AzureServices'
       defaultAction: 'Allow'
       ipRules: []
       virtualNetworkRules: []
