@@ -1,0 +1,10 @@
+{
+  "scenarioId": "OCR-001",
+  "blobName": "integration/smoke-valid.pdf",
+  "fileName": "smoke-valid.pdf",
+  "contentType": "application/pdf",
+  "expectedStatus": "succeeded",
+  "expectedOutputContainer": "ocr-results",
+  "expectedResultPathPattern": "yyyy/MM/dd/integration_smoke-valid.pdf-<encoded-etag>/ocr.json",
+  "expectedTextPathPattern": "yyyy/MM/dd/integration_smoke-valid.pdf-<encoded-etag>/content.txt"
+}

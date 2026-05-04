@@ -1,0 +1,13 @@
+{
+  "statusCode": 503,
+  "headers": {
+    "Retry-After": "30",
+    "x-ms-error-code": "ServiceUnavailable"
+  },
+  "body": {
+    "error": {
+      "code": "ServiceUnavailable",
+      "message": "Synthetic integration-test failure from mocked OCR dependency."
+    }
+  }
+}

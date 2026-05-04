@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:logicapp:schemas:pdf-ocr-failure:1",
+  "title": "PDF OCR Failure Output",
+  "description": "Single failure output contract emitted by the PDF OCR Logic App for validation failures, unsupported media, OCR terminal failures, and workflow exceptions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "createdAt",
+    "source",
+    "workflow",
+    "error"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "status": {
+      "type": "string",
+      "const": "failed"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "workflow": {
+      "$ref": "#/$defs/workflow"
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "UNSUPPORTED_MEDIA_TYPE",
+            "EMPTY_FILE",
+            "FILE_TOO_LARGE",
+            "CORRUPT_OR_UNREADABLE_PDF",
+            "PDF_OCR_WORKFLOW_FAILURE",
+            "BLOB_READ_FAILED",
+            "DOCUMENT_INTELLIGENCE_FAILED",
+            "OUTPUT_WRITE_FAILED"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "object",
+          "description": "Additional error context. Values are intentionally flexible so provider status, observed content type, size limits, and action results can be represented without changing the stable envelope."
+        }
+      }
+    },
+    "ocr": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fileName",
+        "contentType",
+        "sizeBytes",
+        "container",
+        "blobName"
+      ],
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "container": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blobName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "etag": {
+          "type": "string"
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "runId",
+        "triggerName",
+        "correlationId"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "triggerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

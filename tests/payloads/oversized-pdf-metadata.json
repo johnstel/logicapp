@@ -1,0 +1,11 @@
+{
+  "scenarioId": "OCR-005",
+  "blobName": "integration/oversized.pdf",
+  "fileName": "oversized.pdf",
+  "contentType": "application/pdf",
+  "expectedStatus": "failed",
+  "expectedErrorCode": "FILE_TOO_LARGE",
+  "expectedOutputContainer": "ocr-failures",
+  "expectedFailurePathPattern": "yyyy/MM/dd/oversized.pdf/<encoded-etag>/validation-failure.json",
+  "note": "Generate this file under tests/generated with MAX_TEST_PDF_MB greater than the deployed workflow limit."
+}

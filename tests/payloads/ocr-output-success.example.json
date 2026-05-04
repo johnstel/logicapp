@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "1.0",
+  "status": "succeeded",
+  "createdAt": "2026-05-04T12:14:03.405-04:00",
+  "source": {
+    "fileName": "smoke-valid.pdf",
+    "contentType": "application/pdf",
+    "sizeBytes": 593,
+    "container": "pdf-incoming",
+    "blobName": "integration/smoke-valid.pdf",
+    "etag": "0x8DC000000000000",
+    "contentHash": "sha256:b65498cf2e845c4c8e289033dbef9e13628e4c8f7b7a9f689967feee6290fb59"
+  },
+  "workflow": {
+    "name": "pdf-ocr-logic-app",
+    "runId": "08585200000000000000000000000CU00",
+    "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+    "correlationId": "integration-smoke-001"
+  },
+  "ocr": {
+    "provider": "Azure AI Document Intelligence",
+    "model": "prebuilt-read",
+    "operationId": "00000000-0000-0000-0000-000000000000",
+    "apiStatusCode": 200,
+    "text": "PDF OCR Smoke Test",
+    "pages": [
+      {
+        "pageNumber": 1,
+        "text": "PDF OCR Smoke Test",
+        "confidence": 0.99
+      }
+    ]
+  }
+}

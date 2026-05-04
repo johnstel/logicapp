@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0",
+  "status": "failed",
+  "createdAt": "2026-05-04T12:14:03.405-04:00",
+  "source": {
+    "fileName": "corrupt.pdf",
+    "contentType": "application/pdf",
+    "sizeBytes": 128,
+    "container": "pdf-incoming",
+    "blobName": "integration/corrupt.pdf",
+    "etag": "0x8DC000000000001"
+  },
+  "workflow": {
+    "name": "pdf-ocr-logic-app",
+    "runId": "08585200000000000000000000000CU02",
+    "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+    "correlationId": "integration-negative-002"
+  },
+  "error": {
+    "code": "CORRUPT_OR_UNREADABLE_PDF",
+    "message": "Document Intelligence returned a terminal non-succeeded OCR status for this PDF.",
+    "retryable": false,
+    "details": {
+      "ocrStatus": "failed",
+      "providerStatus": "failed"
+    }
+  },
+  "ocr": {
+    "provider": "Azure AI Document Intelligence",
+    "model": "prebuilt-read",
+    "operationId": "00000000-0000-0000-0000-000000000001"
+  }
+}

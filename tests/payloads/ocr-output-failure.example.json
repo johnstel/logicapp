@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.0",
+  "status": "failed",
+  "createdAt": "2026-05-04T12:14:03.405-04:00",
+  "source": {
+    "fileName": "not-a-pdf.txt",
+    "contentType": "text/plain",
+    "sizeBytes": 59,
+    "container": "pdf-incoming",
+    "blobName": "integration/not-a-pdf.txt"
+  },
+  "workflow": {
+    "name": "pdf-ocr-logic-app",
+    "runId": "08585200000000000000000000000CU01",
+    "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+    "correlationId": "integration-negative-001"
+  },
+  "error": {
+    "code": "UNSUPPORTED_MEDIA_TYPE",
+    "message": "Only application/pdf inputs are accepted for OCR.",
+    "retryable": false,
+    "details": {
+      "observedContentType": "text/plain"
+    }
+  }
+}

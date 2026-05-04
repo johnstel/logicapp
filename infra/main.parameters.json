@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "projectName": {
+      "value": "pdfocr"
+    },
+    "environmentName": {
+      "value": "dev"
+    },
+    "location": {
+      "value": "eastus"
+    },
+    "storageSkuName": {
+      "value": "Standard_LRS"
+    },
+    "documentIntelligenceSkuName": {
+      "value": "S0"
+    },
+    "logicAppState": {
+      "value": "Disabled"
+    },
+    "documentIntelligenceApiVersion": {
+      "value": "2024-11-30"
+    },
+    "storageServiceVersion": {
+      "value": "2023-11-03"
+    },
+    "pollIntervalSeconds": {
+      "value": 10
+    },
+    "maxPdfSizeBytes": {
+      "value": 52428800
+    },
+    "incomingContainerName": {
+      "value": "pdf-incoming"
+    },
+    "processedContainerName": {
+      "value": "ocr-results"
+    },
+    "failedContainerName": {
+      "value": "ocr-failures"
+    },
+    "incomingRetentionDays": {
+      "value": 7
+    },
+    "processedRetentionDays": {
+      "value": 90
+    },
+    "failedRetentionDays": {
+      "value": 14
+    },
+    "deployDiagnostics": {
+      "value": false
+    },
+    "logAnalyticsRetentionInDays": {
+      "value": 90
+    }
+  }
+}

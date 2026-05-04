@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:logicapp:schemas:pdf-ocr-result:1",
+  "title": "PDF OCR Success Output",
+  "description": "Single success output contract emitted by the PDF OCR Logic App. Failure outputs use pdf-ocr-failure.schema.json with the same envelope fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "createdAt",
+    "source",
+    "workflow",
+    "ocr"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "status": {
+      "type": "string",
+      "const": "succeeded"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "workflow": {
+      "$ref": "#/$defs/workflow"
+    },
+    "ocr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "operationId",
+        "apiStatusCode",
+        "text",
+        "pages"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "const": "Azure AI Document Intelligence"
+        },
+        "model": {
+          "type": "string",
+          "const": "prebuilt-read"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "apiStatusCode": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "text": {
+          "type": "string"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/page"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fileName",
+        "contentType",
+        "sizeBytes",
+        "container",
+        "blobName"
+      ],
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "container": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blobName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "etag": {
+          "type": "string"
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "runId",
+        "triggerName",
+        "correlationId"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "triggerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "pageNumber"
+      ],
+      "properties": {
+        "pageNumber": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string",
+          "description": "Optional normalized page text; workflow output may carry provider-shaped page objects plus top-level ocr.text."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  }
+}

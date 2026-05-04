@@ -1,0 +1,10 @@
+{
+  "scenarioId": "OCR-006",
+  "blobName": "integration/corrupt.pdf",
+  "fileName": "corrupt.pdf",
+  "contentType": "application/pdf",
+  "expectedStatus": "failed",
+  "acceptableErrorCodes": ["CORRUPT_OR_UNREADABLE_PDF"],
+  "expectedOutputContainer": "ocr-failures",
+  "expectedFailurePathPattern": "yyyy/MM/dd/corrupt.pdf/<encoded-etag>/ocr-failure.json"
+}

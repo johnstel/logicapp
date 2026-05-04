@@ -1,0 +1,918 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "$connections": {
+      "type": "Object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Required. Bicep supplies the Azure Blob managed API connection named azureblob. The connection is only used for the incoming blob trigger."
+      }
+    },
+    "storageAccountName": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Required. Storage account that contains incoming, processed, and failed containers. Infra must expose this same account name. Logic App managed identity needs Reader on the incoming container and Contributor on processed/failed containers."
+      }
+    },
+    "incomingContainerName": {
+      "type": "String",
+      "defaultValue": "pdf-incoming",
+      "metadata": {
+        "description": "Blob container watched by the trigger. Upload PDFs here."
+      }
+    },
+    "processedContainerName": {
+      "type": "String",
+      "defaultValue": "ocr-results",
+      "metadata": {
+        "description": "Blob container where successful OCR JSON documents are written."
+      }
+    },
+    "failedContainerName": {
+      "type": "String",
+      "defaultValue": "ocr-failures",
+      "metadata": {
+        "description": "Blob container where rejection and failure metadata JSON documents are written."
+      }
+    },
+    "documentIntelligenceEndpoint": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Required. Azure AI Document Intelligence endpoint. A trailing slash is tolerated by workflow expressions. Logic App managed identity needs Cognitive Services User."
+      }
+    },
+    "documentIntelligenceApiVersion": {
+      "type": "String",
+      "defaultValue": "2024-11-30",
+      "metadata": {
+        "description": "Document Intelligence REST API version used for prebuilt-read. Basher may override if the target region/resource requires a newer supported stable version."
+      }
+    },
+    "documentIntelligenceAudience": {
+      "type": "String",
+      "defaultValue": "https://cognitiveservices.azure.com/",
+      "metadata": {
+        "description": "Managed identity token audience for Azure AI Document Intelligence/Cognitive Services."
+      }
+    },
+    "storageAudience": {
+      "type": "String",
+      "defaultValue": "https://storage.azure.com/",
+      "metadata": {
+        "description": "Managed identity token audience for Azure Storage data-plane HTTP calls."
+      }
+    },
+    "storageServiceVersion": {
+      "type": "String",
+      "defaultValue": "2023-11-03",
+      "metadata": {
+        "description": "x-ms-version header for Azure Blob Storage REST calls."
+      }
+    },
+    "pollIntervalSeconds": {
+      "type": "Int",
+      "defaultValue": 10,
+      "metadata": {
+        "description": "Seconds to wait between Document Intelligence operation polling attempts."
+      }
+    },
+    "maxPdfSizeBytes": {
+      "type": "Int",
+      "defaultValue": 52428800,
+      "metadata": {
+        "description": "Maximum accepted source PDF size in bytes. Inputs above this limit are written to the failed container with FILE_TOO_LARGE."
+      }
+    }
+  },
+  "triggers": {
+    "When_a_blob_is_added_or_modified_in_incoming": {
+      "type": "ApiConnection",
+      "description": "Polls the incoming container and starts one workflow run per discovered blob.",
+      "recurrence": {
+        "frequency": "Minute",
+        "interval": 1
+      },
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['azureblob']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/v2/datasets/default/triggers/onupdatedfile",
+        "queries": {
+          "folderId": "@parameters('incomingContainerName')",
+          "inferContentType": true,
+          "recursive": false
+        }
+      },
+      "splitOn": "@triggerBody()?['value']"
+    }
+  },
+  "actions": {
+    "Initialize_Processing_Outcome": {
+      "type": "InitializeVariable",
+      "description": "Tracks whether the PDF path succeeded or needs an explicit failed termination.",
+      "inputs": {
+        "variables": [
+          {
+            "name": "processingOutcome",
+            "type": "string",
+            "value": "notStarted"
+          }
+        ]
+      },
+      "runAfter": {}
+    },
+    "Initialize_OCR_Status": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "ocrStatus",
+            "type": "string",
+            "value": "notStarted"
+          }
+        ]
+      },
+      "runAfter": {
+        "Initialize_Processing_Outcome": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Initialize_OCR_Result": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "ocrResult",
+            "type": "object",
+            "value": {}
+          }
+        ]
+      },
+      "runAfter": {
+        "Initialize_OCR_Status": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Condition_Is_PDF": {
+      "type": "If",
+      "description": "Rejects anything that is not a PDF before calling Document Intelligence.",
+      "expression": {
+        "equals": [
+          "@toLower(last(split(coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], triggerBody()?['Path'], ''), '.')))",
+          "pdf"
+        ]
+      },
+      "actions": {
+        "Scope_Process_PDF": {
+          "type": "Scope",
+          "actions": {
+            "Set_Processing_Outcome_Started": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "processingOutcome",
+                "value": "started"
+              },
+              "runAfter": {}
+            },
+            "Condition_Validate_PDF_Size": {
+              "type": "If",
+              "description": "Fails fast for empty PDFs and PDFs above the configured maximum size before bytes are read or submitted to Document Intelligence.",
+              "expression": {
+                "and": [
+                  {
+                    "greater": [
+                      "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                      0
+                    ]
+                  },
+                  {
+                    "lessOrEquals": [
+                      "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                      "@parameters('maxPdfSizeBytes')"
+                    ]
+                  }
+                ]
+              },
+              "actions": {},
+              "else": {
+                "actions": {
+                  "Write_PDF_Size_Validation_Failure": {
+                    "type": "Http",
+                    "description": "Writes a contract-shaped failure for empty or oversized PDFs.",
+                    "inputs": {
+                      "method": "PUT",
+                      "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net/', parameters('failedContainerName'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'yyyy'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'MM'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'dd'), '/', encodeUriComponent(coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')), 'document')), '/', encodeUriComponent(coalesce(triggerBody()?['ETag'], workflow().run.name)), '/validation-failure.json')}",
+                      "headers": {
+                        "x-ms-version": "@parameters('storageServiceVersion')",
+                        "x-ms-blob-type": "BlockBlob",
+                        "Content-Type": "application/json"
+                      },
+                      "body": {
+                        "schemaVersion": "1.0",
+                        "status": "failed",
+                        "createdAt": "@utcNow()",
+                        "source": {
+                          "fileName": "@coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')))",
+                          "contentType": "@coalesce(triggerBody()?['MediaType'], triggerBody()?['ContentType'], 'application/pdf')",
+                          "sizeBytes": "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                          "container": "@parameters('incomingContainerName')",
+                          "blobName": "@replace(if(startsWith(triggerBody()?['Path'], concat('/', parameters('incomingContainerName'), '/')), substring(triggerBody()?['Path'], add(length(parameters('incomingContainerName')), 2)), coalesce(triggerBody()?['Path'], triggerBody()?['Name'], '')), concat('/', parameters('incomingContainerName'), '/'), '')",
+                          "etag": "@triggerBody()?['ETag']"
+                        },
+                        "workflow": {
+                          "name": "@workflow().name",
+                          "runId": "@workflow().run.name",
+                          "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+                          "correlationId": "@workflow().run.name"
+                        },
+                        "error": {
+                          "code": "@if(equals(int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0)), 0), 'EMPTY_FILE', 'FILE_TOO_LARGE')",
+                          "message": "@if(equals(int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0)), 0), 'PDF source blob is empty.', 'PDF source blob exceeds the configured maximum size.')",
+                          "retryable": false,
+                          "details": {
+                            "observedSizeBytes": "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                            "maxPdfSizeBytes": "@parameters('maxPdfSizeBytes')"
+                          }
+                        }
+                      },
+                      "authentication": {
+                        "type": "ManagedServiceIdentity",
+                        "audience": "@parameters('storageAudience')"
+                      },
+                      "retryPolicy": {
+                        "type": "exponential",
+                        "interval": "PT20S",
+                        "count": 4
+                      }
+                    },
+                    "runAfter": {},
+                    "runtimeConfiguration": {
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    }
+                  },
+                  "Terminate_PDF_Size_Validation_Failed": {
+                    "type": "Terminate",
+                    "inputs": {
+                      "runStatus": "Failed",
+                      "runError": {
+                        "code": "@if(equals(int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0)), 0), 'EmptyFile', 'FileTooLarge')",
+                        "message": "PDF failed intake size validation. Failure metadata was written to the failed container."
+                      }
+                    },
+                    "runAfter": {
+                      "Write_PDF_Size_Validation_Failure": [
+                        "Succeeded",
+                        "Failed",
+                        "TimedOut"
+                      ]
+                    }
+                  }
+                }
+              },
+              "runAfter": {
+                "Set_Processing_Outcome_Started": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "Check_Prior_OCR_Result": {
+              "type": "Http",
+              "description": "Idempotency probe: a source blob path plus ETag maps to one deterministic result path. Existing ocr.json means this event is a no-op duplicate.",
+              "inputs": {
+                "method": "HEAD",
+                "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net/', parameters('processedContainerName'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'yyyy'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'MM'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'dd'), '/', encodeUriComponent(replace(coalesce(triggerBody()?['Path'], triggerBody()?['Name'], 'document.pdf'), '/', '_')), '-', encodeUriComponent(replace(coalesce(triggerBody()?['ETag'], 'no-etag'), '\"', '')), '/ocr.json')}",
+                "headers": {
+                  "x-ms-version": "@parameters('storageServiceVersion')"
+                },
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "@parameters('storageAudience')"
+                },
+                "retryPolicy": {
+                  "type": "none"
+                }
+              },
+              "runAfter": {
+                "Condition_Validate_PDF_Size": [
+                  "Succeeded"
+                ]
+              },
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Condition_Duplicate_Blob_ETag": {
+              "type": "If",
+              "description": "No-op duplicate detection for the same source blob path and ETag.",
+              "expression": {
+                "equals": [
+                  "@outputs('Check_Prior_OCR_Result')?['statusCode']",
+                  200
+                ]
+              },
+              "actions": {
+                "Terminate_Duplicate_Blob_ETag": {
+                  "type": "Terminate",
+                  "inputs": {
+                    "runStatus": "Succeeded"
+                  },
+                  "runAfter": {}
+                }
+              },
+              "else": {
+                "actions": {}
+              },
+              "runAfter": {
+                "Check_Prior_OCR_Result": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              }
+            },
+            "Download_PDF_From_Blob": {
+              "type": "Http",
+              "description": "Reads the source PDF over the Azure Storage data plane using the Logic App managed identity.",
+              "inputs": {
+                "method": "GET",
+                "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net', if(startsWith(triggerBody()?['Path'], '/'), triggerBody()?['Path'], concat('/', triggerBody()?['Path'])))}",
+                "headers": {
+                  "x-ms-version": "@parameters('storageServiceVersion')"
+                },
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "@parameters('storageAudience')"
+                },
+                "retryPolicy": {
+                  "type": "exponential",
+                  "interval": "PT20S",
+                  "count": 4
+                }
+              },
+              "runAfter": {
+                "Condition_Duplicate_Blob_ETag": [
+                  "Succeeded"
+                ]
+              },
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Start_Document_Intelligence_Read": {
+              "type": "Http",
+              "description": "Submits the PDF bytes to Azure AI Document Intelligence prebuilt-read.",
+              "inputs": {
+                "method": "POST",
+                "uri": "@{concat(if(endsWith(parameters('documentIntelligenceEndpoint'), '/'), substring(parameters('documentIntelligenceEndpoint'), 0, sub(length(parameters('documentIntelligenceEndpoint')), 1)), parameters('documentIntelligenceEndpoint')), '/documentintelligence/documentModels/prebuilt-read:analyze?api-version=', parameters('documentIntelligenceApiVersion'))}",
+                "headers": {
+                  "Content-Type": "application/pdf"
+                },
+                "body": "@body('Download_PDF_From_Blob')",
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "@parameters('documentIntelligenceAudience')"
+                },
+                "retryPolicy": {
+                  "type": "exponential",
+                  "interval": "PT20S",
+                  "count": 3
+                }
+              },
+              "runAfter": {
+                "Download_PDF_From_Blob": [
+                  "Succeeded"
+                ]
+              },
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Until_OCR_Operation_Completes": {
+              "type": "Until",
+              "description": "Polls the operation-location until Document Intelligence returns a terminal status.",
+              "expression": "@or(equals(variables('ocrStatus'), 'succeeded'), equals(variables('ocrStatus'), 'failed'), equals(variables('ocrStatus'), 'canceled'))",
+              "limit": {
+                "count": 60,
+                "timeout": "PT15M"
+              },
+              "actions": {
+                "Delay_Between_Polls": {
+                  "type": "Wait",
+                  "inputs": {
+                    "interval": {
+                      "count": "@parameters('pollIntervalSeconds')",
+                      "unit": "Second"
+                    }
+                  },
+                  "runAfter": {}
+                },
+                "Get_OCR_Operation_Status": {
+                  "type": "Http",
+                  "inputs": {
+                    "method": "GET",
+                    "uri": "@{coalesce(outputs('Start_Document_Intelligence_Read')?['headers']?['Operation-Location'], outputs('Start_Document_Intelligence_Read')?['headers']?['operation-location'])}",
+                    "authentication": {
+                      "type": "ManagedServiceIdentity",
+                      "audience": "@parameters('documentIntelligenceAudience')"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "interval": "PT15S",
+                      "count": 3
+                    }
+                  },
+                  "runAfter": {
+                    "Delay_Between_Polls": [
+                      "Succeeded"
+                    ]
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Set_OCR_Status": {
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "ocrStatus",
+                    "value": "@toLower(coalesce(body('Get_OCR_Operation_Status')?['status'], 'unknown'))"
+                  },
+                  "runAfter": {
+                    "Get_OCR_Operation_Status": [
+                      "Succeeded"
+                    ]
+                  }
+                },
+                "Set_OCR_Result": {
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "ocrResult",
+                    "value": "@body('Get_OCR_Operation_Status')"
+                  },
+                  "runAfter": {
+                    "Set_OCR_Status": [
+                      "Succeeded"
+                    ]
+                  }
+                }
+              },
+              "runAfter": {
+                "Start_Document_Intelligence_Read": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "Condition_OCR_Succeeded": {
+              "type": "If",
+              "expression": {
+                "equals": [
+                  "@variables('ocrStatus')",
+                  "succeeded"
+                ]
+              },
+              "actions": {
+                "Write_OCR_JSON_To_Processed": {
+                  "type": "Http",
+                  "description": "Persists a self-describing OCR result JSON document in the processed container.",
+                  "inputs": {
+                    "method": "PUT",
+                    "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net/', parameters('processedContainerName'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'yyyy'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'MM'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'dd'), '/', encodeUriComponent(replace(coalesce(triggerBody()?['Path'], triggerBody()?['Name'], 'document.pdf'), '/', '_')), '-', encodeUriComponent(replace(coalesce(triggerBody()?['ETag'], 'no-etag'), '\"', '')), '/ocr.json')}",
+                    "headers": {
+                      "x-ms-version": "@parameters('storageServiceVersion')",
+                      "x-ms-blob-type": "BlockBlob",
+                      "Content-Type": "application/json"
+                    },
+                    "body": {
+                      "schemaVersion": "1.0",
+                      "status": "succeeded",
+                      "createdAt": "@utcNow()",
+                      "source": {
+                        "fileName": "@coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')))",
+                        "contentType": "@coalesce(triggerBody()?['MediaType'], triggerBody()?['ContentType'], 'application/pdf')",
+                        "sizeBytes": "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                        "container": "@parameters('incomingContainerName')",
+                        "blobName": "@replace(if(startsWith(triggerBody()?['Path'], concat('/', parameters('incomingContainerName'), '/')), substring(triggerBody()?['Path'], add(length(parameters('incomingContainerName')), 2)), coalesce(triggerBody()?['Path'], triggerBody()?['Name'], '')), concat('/', parameters('incomingContainerName'), '/'), '')",
+                        "etag": "@triggerBody()?['ETag']"
+                      },
+                      "workflow": {
+                        "name": "@workflow().name",
+                        "runId": "@workflow().run.name",
+                        "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+                        "correlationId": "@workflow().run.name"
+                      },
+                      "ocr": {
+                        "provider": "Azure AI Document Intelligence",
+                        "model": "prebuilt-read",
+                        "operationId": "@last(split(coalesce(outputs('Start_Document_Intelligence_Read')?['headers']?['Operation-Location'], outputs('Start_Document_Intelligence_Read')?['headers']?['operation-location'], ''), '/'))",
+                        "apiStatusCode": "@outputs('Get_OCR_Operation_Status')?['statusCode']",
+                        "text": "@coalesce(variables('ocrResult')?['analyzeResult']?['content'], '')",
+                        "pages": "@coalesce(variables('ocrResult')?['analyzeResult']?['pages'], createArray())"
+                      }
+                    },
+                    "authentication": {
+                      "type": "ManagedServiceIdentity",
+                      "audience": "@parameters('storageAudience')"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "interval": "PT20S",
+                      "count": 4
+                    }
+                  },
+                  "runAfter": {},
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Write_OCR_Content_Text_To_Processed": {
+                  "type": "Http",
+                  "description": "Persists extracted plain text next to ocr.json for consumers that do not need the JSON envelope.",
+                  "inputs": {
+                    "method": "PUT",
+                    "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net/', parameters('processedContainerName'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'yyyy'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'MM'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'dd'), '/', encodeUriComponent(replace(coalesce(triggerBody()?['Path'], triggerBody()?['Name'], 'document.pdf'), '/', '_')), '-', encodeUriComponent(replace(coalesce(triggerBody()?['ETag'], 'no-etag'), '\"', '')), '/content.txt')}",
+                    "headers": {
+                      "x-ms-version": "@parameters('storageServiceVersion')",
+                      "x-ms-blob-type": "BlockBlob",
+                      "Content-Type": "text/plain; charset=utf-8"
+                    },
+                    "body": "@coalesce(variables('ocrResult')?['analyzeResult']?['content'], '')",
+                    "authentication": {
+                      "type": "ManagedServiceIdentity",
+                      "audience": "@parameters('storageAudience')"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "interval": "PT20S",
+                      "count": 4
+                    }
+                  },
+                  "runAfter": {
+                    "Write_OCR_JSON_To_Processed": [
+                      "Succeeded"
+                    ]
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Set_Processing_Outcome_Succeeded": {
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "processingOutcome",
+                    "value": "succeeded"
+                  },
+                  "runAfter": {
+                    "Write_OCR_Content_Text_To_Processed": [
+                      "Succeeded"
+                    ]
+                  }
+                }
+              },
+              "else": {
+                "actions": {
+                  "Write_OCR_Failure_Metadata": {
+                    "type": "Http",
+                    "description": "Persists OCR terminal failure details in the failed container before the workflow is marked failed.",
+                    "inputs": {
+                      "method": "PUT",
+                      "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net/', parameters('failedContainerName'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'yyyy'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'MM'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'dd'), '/', encodeUriComponent(coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')), 'document')), '/', encodeUriComponent(coalesce(triggerBody()?['ETag'], workflow().run.name)), '/ocr-failure.json')}",
+                      "headers": {
+                        "x-ms-version": "@parameters('storageServiceVersion')",
+                        "x-ms-blob-type": "BlockBlob",
+                        "Content-Type": "application/json"
+                      },
+                      "body": {
+                        "schemaVersion": "1.0",
+                        "status": "failed",
+                        "createdAt": "@utcNow()",
+                        "source": {
+                          "fileName": "@coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')))",
+                          "contentType": "@coalesce(triggerBody()?['MediaType'], triggerBody()?['ContentType'], 'application/pdf')",
+                          "sizeBytes": "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                          "container": "@parameters('incomingContainerName')",
+                          "blobName": "@replace(if(startsWith(triggerBody()?['Path'], concat('/', parameters('incomingContainerName'), '/')), substring(triggerBody()?['Path'], add(length(parameters('incomingContainerName')), 2)), coalesce(triggerBody()?['Path'], triggerBody()?['Name'], '')), concat('/', parameters('incomingContainerName'), '/'), '')",
+                          "etag": "@triggerBody()?['ETag']"
+                        },
+                        "workflow": {
+                          "name": "@workflow().name",
+                          "runId": "@workflow().run.name",
+                          "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+                          "correlationId": "@workflow().run.name"
+                        },
+                        "error": {
+                          "code": "CORRUPT_OR_UNREADABLE_PDF",
+                          "message": "Document Intelligence returned a terminal non-succeeded OCR status for this PDF.",
+                          "retryable": false,
+                          "details": {
+                            "ocrStatus": "@variables('ocrStatus')",
+                            "providerStatus": "@variables('ocrResult')?['status']"
+                          }
+                        },
+                        "ocr": {
+                          "provider": "Azure AI Document Intelligence",
+                          "model": "prebuilt-read",
+                          "operationId": "@last(split(coalesce(outputs('Start_Document_Intelligence_Read')?['headers']?['Operation-Location'], outputs('Start_Document_Intelligence_Read')?['headers']?['operation-location'], ''), '/'))"
+                        }
+                      },
+                      "authentication": {
+                        "type": "ManagedServiceIdentity",
+                        "audience": "@parameters('storageAudience')"
+                      },
+                      "retryPolicy": {
+                        "type": "exponential",
+                        "interval": "PT20S",
+                        "count": 4
+                      }
+                    },
+                    "runAfter": {},
+                    "runtimeConfiguration": {
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    }
+                  },
+                  "Set_Processing_Outcome_OCR_Failed": {
+                    "type": "SetVariable",
+                    "inputs": {
+                      "name": "processingOutcome",
+                      "value": "ocrFailed"
+                    },
+                    "runAfter": {
+                      "Write_OCR_Failure_Metadata": [
+                        "Succeeded"
+                      ]
+                    }
+                  }
+                }
+              },
+              "runAfter": {
+                "Until_OCR_Operation_Completes": [
+                  "Succeeded"
+                ]
+              }
+            }
+          },
+          "runAfter": {}
+        },
+        "Scope_Record_Unexpected_Failure": {
+          "type": "Scope",
+          "description": "Catch path for download, submit, poll, or write errors inside Scope_Process_PDF.",
+          "actions": {
+            "Write_Workflow_Failure_Metadata": {
+              "type": "Http",
+              "inputs": {
+                "method": "PUT",
+                "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net/', parameters('failedContainerName'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'yyyy'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'MM'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'dd'), '/', encodeUriComponent(coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')), 'document')), '/', encodeUriComponent(coalesce(triggerBody()?['ETag'], workflow().run.name)), '/workflow-failure.json')}",
+                "headers": {
+                  "x-ms-version": "@parameters('storageServiceVersion')",
+                  "x-ms-blob-type": "BlockBlob",
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "schemaVersion": "1.0",
+                  "status": "failed",
+                  "createdAt": "@utcNow()",
+                  "source": {
+                    "fileName": "@coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')))",
+                    "contentType": "@coalesce(triggerBody()?['MediaType'], triggerBody()?['ContentType'], 'application/pdf')",
+                    "sizeBytes": "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                    "container": "@parameters('incomingContainerName')",
+                    "blobName": "@replace(if(startsWith(triggerBody()?['Path'], concat('/', parameters('incomingContainerName'), '/')), substring(triggerBody()?['Path'], add(length(parameters('incomingContainerName')), 2)), coalesce(triggerBody()?['Path'], triggerBody()?['Name'], '')), concat('/', parameters('incomingContainerName'), '/'), '')",
+                    "etag": "@triggerBody()?['ETag']"
+                  },
+                  "workflow": {
+                    "name": "@workflow().name",
+                    "runId": "@workflow().run.name",
+                    "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+                    "correlationId": "@workflow().run.name"
+                  },
+                  "error": {
+                    "code": "PDF_OCR_WORKFLOW_FAILURE",
+                    "message": "PDF OCR workflow failed before a successful result could be written.",
+                    "retryable": true,
+                    "details": {
+                      "scope": "Scope_Process_PDF",
+                      "message": "A processing action failed or timed out. Action inputs and outputs are secured in run history; raw action results are not persisted to failure artifacts."
+                    }
+                  }
+                },
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "@parameters('storageAudience')"
+                },
+                "retryPolicy": {
+                  "type": "exponential",
+                  "interval": "PT20S",
+                  "count": 4
+                }
+              },
+              "runAfter": {},
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Terminate_Unexpected_Failure": {
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Failed",
+                "runError": {
+                  "code": "PdfOcrWorkflowFailure",
+                  "message": "PDF OCR workflow failed. Failure metadata was written to the failed container."
+                }
+              },
+              "runAfter": {
+                "Write_Workflow_Failure_Metadata": [
+                  "Succeeded",
+                  "Failed",
+                  "TimedOut"
+                ]
+              }
+            }
+          },
+          "runAfter": {
+            "Scope_Process_PDF": [
+              "Failed",
+              "TimedOut"
+            ]
+          }
+        },
+        "Condition_Finalize_PDF_Run": {
+          "type": "If",
+          "expression": {
+            "equals": [
+              "@variables('processingOutcome')",
+              "succeeded"
+            ]
+          },
+          "actions": {
+            "Terminate_PDF_OCR_Succeeded": {
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Succeeded"
+              },
+              "runAfter": {}
+            }
+          },
+          "else": {
+            "actions": {
+              "Terminate_PDF_OCR_Failed": {
+                "type": "Terminate",
+                "inputs": {
+                  "runStatus": "Failed",
+                  "runError": {
+                    "code": "PdfOcrFailed",
+                    "message": "Document Intelligence OCR did not complete successfully. Failure metadata was written to the failed container."
+                  }
+                },
+                "runAfter": {}
+              }
+            }
+          },
+          "runAfter": {
+            "Scope_Process_PDF": [
+              "Succeeded"
+            ]
+          }
+        }
+      },
+      "else": {
+        "actions": {
+          "Scope_Reject_Non_PDF": {
+            "type": "Scope",
+            "actions": {
+              "Write_Non_PDF_Rejection_Metadata": {
+                "type": "Http",
+                "description": "Records rejected non-PDF files so operators can inspect why the run was skipped.",
+                "inputs": {
+                  "method": "PUT",
+                  "uri": "@{concat('https://', parameters('storageAccountName'), '.blob.core.windows.net/', parameters('failedContainerName'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'yyyy'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'MM'), '/', formatDateTime(coalesce(triggerBody()?['LastModified'], triggerBody()?['LastModifiedDateTime'], utcNow()), 'dd'), '/', encodeUriComponent(coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')), 'blob')), '/', encodeUriComponent(coalesce(triggerBody()?['ETag'], workflow().run.name)), '/non-pdf.json')}",
+                  "headers": {
+                    "x-ms-version": "@parameters('storageServiceVersion')",
+                    "x-ms-blob-type": "BlockBlob",
+                    "Content-Type": "application/json"
+                  },
+                  "body": {
+                    "schemaVersion": "1.0",
+                    "status": "failed",
+                    "createdAt": "@utcNow()",
+                    "source": {
+                      "fileName": "@coalesce(triggerBody()?['Name'], triggerBody()?['DisplayName'], last(split(triggerBody()?['Path'], '/')))",
+                      "contentType": "@coalesce(triggerBody()?['MediaType'], triggerBody()?['ContentType'], 'application/pdf')",
+                      "sizeBytes": "@int(coalesce(triggerBody()?['Size'], triggerBody()?['Length'], triggerBody()?['ContentLength'], 0))",
+                      "container": "@parameters('incomingContainerName')",
+                      "blobName": "@replace(if(startsWith(triggerBody()?['Path'], concat('/', parameters('incomingContainerName'), '/')), substring(triggerBody()?['Path'], add(length(parameters('incomingContainerName')), 2)), coalesce(triggerBody()?['Path'], triggerBody()?['Name'], '')), concat('/', parameters('incomingContainerName'), '/'), '')",
+                      "etag": "@triggerBody()?['ETag']"
+                    },
+                    "workflow": {
+                      "name": "@workflow().name",
+                      "runId": "@workflow().run.name",
+                      "triggerName": "When_a_blob_is_added_or_modified_in_incoming",
+                      "correlationId": "@workflow().run.name"
+                    },
+                    "error": {
+                      "code": "UNSUPPORTED_MEDIA_TYPE",
+                      "message": "Only application/pdf inputs are accepted for OCR.",
+                      "retryable": false,
+                      "details": {
+                        "observedContentType": "@coalesce(triggerBody()?['MediaType'], triggerBody()?['ContentType'], '')"
+                      }
+                    }
+                  },
+                  "authentication": {
+                    "type": "ManagedServiceIdentity",
+                    "audience": "@parameters('storageAudience')"
+                  },
+                  "retryPolicy": {
+                    "type": "exponential",
+                    "interval": "PT20S",
+                    "count": 4
+                  }
+                },
+                "runAfter": {},
+                "runtimeConfiguration": {
+                  "secureData": {
+                    "properties": [
+                      "inputs",
+                      "outputs"
+                    ]
+                  }
+                }
+              },
+              "Terminate_Rejected_Non_PDF": {
+                "type": "Terminate",
+                "inputs": {
+                  "runStatus": "Failed",
+                  "runError": {
+                    "code": "UnsupportedMediaType",
+                    "message": "Only application/pdf inputs are accepted for OCR. Failure metadata was written to the failed container."
+                  }
+                },
+                "runAfter": {
+                  "Write_Non_PDF_Rejection_Metadata": [
+                    "Succeeded"
+                  ]
+                }
+              }
+            },
+            "runAfter": {}
+          }
+        }
+      },
+      "runAfter": {
+        "Initialize_OCR_Result": [
+          "Succeeded"
+        ]
+      }
+    }
+  },
+  "outputs": {}
+}

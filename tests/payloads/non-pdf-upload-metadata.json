@@ -1,0 +1,10 @@
+{
+  "scenarioId": "OCR-003",
+  "blobName": "integration/not-a-pdf.txt",
+  "fileName": "not-a-pdf.txt",
+  "contentType": "text/plain",
+  "expectedStatus": "failed",
+  "expectedErrorCode": "UNSUPPORTED_MEDIA_TYPE",
+  "expectedOutputContainer": "ocr-failures",
+  "expectedFailurePathPattern": "yyyy/MM/dd/not-a-pdf.txt/<encoded-etag>/non-pdf.json"
+}

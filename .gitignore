@@ -1,0 +1,8 @@
+# Operational agent state
+.squad/
+.copilot/
+.squad-workstream
+
+# Python generated artifacts
+__pycache__/
+*.py[cod]
